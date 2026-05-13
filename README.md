@@ -17,16 +17,10 @@ AAPL, MSFT, GOOGL, NVDA, META, AMZN, TSLA
 
 ```bash
 pip install -r requirements.txt
-
-# Step 1 — train models (downloads data, ~5-10 min)
-python main.py
-
-# Step 2 — launch the browser dashboard
-streamlit run app.py
-# Opens at http://localhost:8501
+python app.py        # opens the dashboard in your browser automatically
 ```
 
-You can also skip step 1 and click **Train / Retrain Models** inside the dashboard.
+The dashboard has a **Train / Retrain Models** button — no need to run `main.py` separately.
 
 ## Browser dashboard features
 

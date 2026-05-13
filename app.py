@@ -2,6 +2,16 @@ import os
 import sys
 import warnings
 
+# When run directly with `python app.py`, re-launch via streamlit so the
+# browser opens automatically — no need to know about `streamlit run`.
+if __name__ == "__main__" and "streamlit" not in sys.modules:
+    import subprocess
+    sys.exit(subprocess.run(
+        [sys.executable, "-m", "streamlit", "run", __file__,
+         "--server.headless", "false"],
+        check=False,
+    ).returncode)
+
 warnings.filterwarnings("ignore")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
