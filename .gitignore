@@ -1,0 +1,12 @@
+data/
+results/*.joblib
+results/*.keras
+results/*.h5
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+.env
+*.egg-info/
+dist/
+build/
