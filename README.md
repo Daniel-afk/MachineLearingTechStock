@@ -13,18 +13,37 @@ AAPL, MSFT, GOOGL, NVDA, META, AMZN, TSLA
 4. **Models** — Trains Random Forest, XGBoost, and a 2-layer LSTM; evaluates each on a held-out time split
 5. **Results** — Prints per-class precision/recall/F1 and saves a confusion-matrix comparison to `results/model_comparison.png`
 
-## Setup
+## Quick start
 
 ```bash
 pip install -r requirements.txt
+
+# Step 1 — train models (downloads data, ~5-10 min)
 python main.py
+
+# Step 2 — launch the browser dashboard
+streamlit run app.py
+# Opens at http://localhost:8501
 ```
+
+You can also skip step 1 and click **Train / Retrain Models** inside the dashboard.
+
+## Browser dashboard features
+
+- **Candlestick chart** with Bollinger Bands, SMA 20/50, and Buy/Sell/Hold signal markers
+- **RSI panel** with overbought/oversold zones
+- **MACD panel** with histogram
+- **Signal table** — last N days with predicted label and actual forward return
+- **Feature importance** bar chart (Random Forest or XGBoost)
+- **Confusion matrix** comparison once training is complete
+- Switch between tickers and models instantly from the sidebar
 
 ## Project layout
 
 ```
 config.py          — tickers, dates, thresholds, hyperparameters
-main.py            — end-to-end pipeline
+app.py             — Streamlit web dashboard
+main.py            — CLI training pipeline
 src/
   data_fetcher.py  — yfinance download + CSV cache
   features.py      — technical indicator computation
