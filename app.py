@@ -24,9 +24,8 @@ from plotly.subplots import make_subplots
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import FEATURE_COLS, RESULTS_DIR, SEQUENCE_LEN, TICKERS
-from src.data_fetcher import fetch_stock_data
-from src.features import add_features
+from config import RESULTS_DIR, SEQUENCE_LEN, TICKERS
+from src.features import FEATURE_COLS, add_features
 from src.labels import add_labels
 from src.model_lstm import TENSORFLOW_AVAILABLE
 from src.news_fetcher import daily_sentiment, fetch_news
