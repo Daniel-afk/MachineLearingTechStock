@@ -121,20 +121,24 @@ def main():
     joblib.dump(xgb, os.path.join(RESULTS_DIR, "xgb_model.joblib"))
     results.append(("XGBoost", y_test, xgb_preds, xgb_acc))
 
-    print("\nBuilding LSTM sequences...")
-    Xtr, ytr, Xte, yte = _build_lstm_sequences(train_df, test_df, scaler)
-    print(f"LSTM sequences — train: {Xtr.shape}, test: {Xte.shape}")
+    from src.model_lstm import TENSORFLOW_AVAILABLE
+    if TENSORFLOW_AVAILABLE:
+        print("\nBuilding LSTM sequences...")
+        Xtr, ytr, Xte, yte = _build_lstm_sequences(train_df, test_df, scaler)
+        print(f"LSTM sequences — train: {Xtr.shape}, test: {Xte.shape}")
 
-    val_cut = int(0.1 * len(Xtr))
-    Xval, yval = Xtr[-val_cut:], ytr[-val_cut:]
-    Xtr2, ytr2 = Xtr[:-val_cut], ytr[:-val_cut]
+        val_cut = int(0.1 * len(Xtr))
+        Xval, yval = Xtr[-val_cut:], ytr[-val_cut:]
+        Xtr2, ytr2 = Xtr[:-val_cut], ytr[:-val_cut]
 
-    print("\nTraining LSTM...")
-    lstm = train_lstm(Xtr2, ytr2, Xval, yval, epochs=30, batch_size=64)
-    lstm.save(os.path.join(RESULTS_DIR, "lstm_model.keras"))
+        print("\nTraining LSTM...")
+        lstm = train_lstm(Xtr2, ytr2, Xval, yval, epochs=30, batch_size=64)
+        lstm.save(os.path.join(RESULTS_DIR, "lstm_model.keras"))
 
-    lstm_preds, lstm_acc = evaluate_lstm(lstm, Xte, yte)
-    results.append(("LSTM", yte, lstm_preds, lstm_acc))
+        lstm_preds, lstm_acc = evaluate_lstm(lstm, Xte, yte)
+        results.append(("LSTM", yte, lstm_preds, lstm_acc))
+    else:
+        print("\nSkipping LSTM — TensorFlow not installed (not supported on Python 3.14+).")
 
     print_summary(results)
     plot_comparison(results)

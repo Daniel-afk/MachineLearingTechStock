@@ -28,6 +28,7 @@ from config import FEATURE_COLS, RESULTS_DIR, SEQUENCE_LEN, TICKERS
 from src.data_fetcher import fetch_stock_data
 from src.features import add_features
 from src.labels import add_labels
+from src.model_lstm import TENSORFLOW_AVAILABLE
 from src.news_fetcher import daily_sentiment, fetch_news
 
 LABEL_NAME = {0: "Sell", 1: "Hold", 2: "Buy"}
@@ -47,7 +48,10 @@ st.set_page_config(
 with st.sidebar:
     st.title("📈 Tech Stock ML")
     ticker = st.selectbox("Stock", TICKERS)
-    model_name = st.selectbox("Model", ["Random Forest", "XGBoost", "LSTM"])
+    available_models = ["Random Forest", "XGBoost"] + (["LSTM"] if TENSORFLOW_AVAILABLE else [])
+    model_name = st.selectbox("Model", available_models)
+    if not TENSORFLOW_AVAILABLE:
+        st.caption("LSTM unavailable — TensorFlow not supported on Python 3.14+.")
     lookback_days = st.slider("Chart history (days)", 60, 500, 252)
     signal_days = st.slider("Signal history (days)", 10, 90, 30)
     show_sentiment = st.toggle("Show sentiment overlay", value=True)
@@ -186,12 +190,13 @@ with col4:
         st.metric("News Sentiment", "—")
 
 with col5:
+    total = 3 if TENSORFLOW_AVAILABLE else 2
     models_ready = sum([
         os.path.exists(os.path.join(RESULTS_DIR, "rf_model.joblib")),
         os.path.exists(os.path.join(RESULTS_DIR, "xgb_model.joblib")),
         os.path.exists(os.path.join(RESULTS_DIR, "lstm_model.keras")),
     ])
-    st.metric("Models trained", f"{models_ready} / 3")
+    st.metric("Models trained", f"{models_ready} / {total}")
 
 if model is None:
     st.warning(
