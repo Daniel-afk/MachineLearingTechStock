@@ -80,10 +80,14 @@ if train_btn:
 
 @st.cache_data(ttl=3600, show_spinner="Fetching stock data…")
 def load_ticker(t):
-    df = fetch_stock_data(t)
-    df = add_features(df)
-    df = add_labels(df)
-    return df
+    try:
+        df = fetch_stock_data(t)
+        df = add_features(df)
+        df = add_labels(df)
+        return df
+    except Exception as exc:
+        # Re-raise with the real message so Streamlit shows it unredacted
+        raise RuntimeError(f"Failed to load {t}: {type(exc).__name__}: {exc}") from exc
 
 
 @st.cache_data(ttl=900, show_spinner="Fetching latest news…")
