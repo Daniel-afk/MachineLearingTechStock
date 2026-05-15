@@ -323,76 +323,103 @@ with col_right:
 
 # ── Backtest ─────────────────────────────────────────────────────────────────
 
-with st.expander("📊 Backtest — Strategy vs Buy & Hold", expanded=True):
-    from config import TEST_SIZE
-    if model is None or scaler is None:
-        st.info("Train models first to see backtest results.")
-    elif len(signals) < 20:
-        st.info("Not enough signal data. Train models first.")
-    else:
-        n_test = int(len(df) * TEST_SIZE)
-        test_df_bt = df.iloc[-n_test:]
-        test_sigs = signals[signals.index.isin(test_df_bt.index)]
-        test_prices = test_df_bt["Close"].reindex(test_sigs.index)
+st.divider()
+st.subheader("📊 Backtest — Strategy vs Buy & Hold")
 
-        bt = run_backtest(test_sigs, test_prices)
+from config import TEST_SIZE
+if model is None or scaler is None:
+    st.info("Train models first to see backtest results.")
+elif len(signals) < 20:
+    st.info("Not enough signal data. Train models first.")
+else:
+    n_test = int(len(df) * TEST_SIZE)
+    test_df_bt = df.iloc[-n_test:]
+    test_sigs   = signals[signals.index.isin(test_df_bt.index)]
+    test_prices = test_df_bt["Close"].reindex(test_sigs.index)
 
-        alpha = bt.total_return - bt.benchmark_return
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric(
-            "Strategy return",
-            f"{bt.total_return*100:+.1f}%",
-            f"α {alpha*100:+.1f}% vs B&H",
-        )
-        c2.metric("Sharpe ratio", f"{bt.sharpe_ratio:.2f}")
-        c3.metric("Max drawdown", f"{bt.max_drawdown*100:.1f}%")
-        c4.metric(
-            "Win rate",
-            f"{bt.win_rate*100:.0f}%",
-            f"{bt.num_trades} trades",
-        )
+    bt = run_backtest(test_sigs, test_prices)
 
-        fig_bt = go.Figure()
-        fig_bt.add_trace(go.Scatter(
-            x=bt.equity_curve.index, y=bt.equity_curve.round(2),
-            name="Strategy", line=dict(color="#22c55e", width=2),
-            fill="tozeroy", fillcolor="rgba(34,197,94,0.07)",
-        ))
-        fig_bt.add_trace(go.Scatter(
-            x=bt.benchmark_curve.index, y=bt.benchmark_curve.round(2),
-            name="Buy & Hold", line=dict(color="#6366f1", width=2, dash="dash"),
-        ))
+    # ── Metric row ────────────────────────────────────────────────────────────
+    alpha = bt.total_return - bt.benchmark_return
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Strategy return",  f"{bt.total_return*100:+.1f}%",
+              f"α {alpha*100:+.1f}% vs B&H")
+    c2.metric("Buy & Hold",       f"{bt.benchmark_return*100:+.1f}%")
+    c3.metric("Sharpe ratio",     f"{bt.sharpe_ratio:.2f}")
+    c4.metric("Max drawdown",     f"{bt.max_drawdown*100:.1f}%")
+    c5.metric("Win rate",         f"{bt.win_rate*100:.0f}%",
+              f"{bt.num_trades} trades")
 
-        # Mark buy and sell trades on chart
-        if not bt.trades.empty:
-            buys  = bt.trades[bt.trades["action"] == "BUY"]
-            sells = bt.trades[bt.trades["action"] == "SELL"]
-            if not buys.empty:
-                buy_vals = bt.equity_curve.reindex(buys["date"]).values
-                fig_bt.add_trace(go.Scatter(
-                    x=buys["date"], y=buy_vals, mode="markers",
-                    name="Buy", marker=dict(symbol="triangle-up", size=10,
-                                            color="#22c55e", line=dict(width=1, color="white")),
-                ))
-            if not sells.empty:
-                sell_vals = bt.equity_curve.reindex(sells["date"]).values
-                fig_bt.add_trace(go.Scatter(
-                    x=sells["date"], y=sell_vals, mode="markers",
-                    name="Sell", marker=dict(symbol="triangle-down", size=10,
-                                             color="#ef4444", line=dict(width=1, color="white")),
-                ))
+    # ── Equity curve + Drawdown subplots ─────────────────────────────────────
+    drawdown = (bt.equity_curve - bt.equity_curve.cummax()) / bt.equity_curve.cummax() * 100
 
-        fig_bt.update_layout(
-            template="plotly_dark", height=380,
-            yaxis_title="Portfolio value ($)",
-            margin=dict(l=0, r=0, t=10, b=0),
-            legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0),
-        )
-        st.plotly_chart(fig_bt, use_container_width=True)
-        st.caption(
-            f"Test period: {test_df_bt.index[0].date()} → {test_df_bt.index[-1].date()}  |  "
-            f"$10,000 initial capital  |  0.1% transaction cost per trade"
-        )
+    fig_bt = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        row_heights=[0.68, 0.32],
+        vertical_spacing=0.04,
+        subplot_titles=("Portfolio value ($)", "Drawdown (%)"),
+    )
+
+    # Equity curves
+    fig_bt.add_trace(go.Scatter(
+        x=bt.equity_curve.index, y=bt.equity_curve.round(2),
+        name="Strategy",
+        line=dict(color="#22c55e", width=2.5),
+        fill="tozeroy", fillcolor="rgba(34,197,94,0.06)",
+    ), row=1, col=1)
+    fig_bt.add_trace(go.Scatter(
+        x=bt.benchmark_curve.index, y=bt.benchmark_curve.round(2),
+        name="Buy & Hold",
+        line=dict(color="#6366f1", width=2, dash="dash"),
+    ), row=1, col=1)
+
+    # Trade markers on equity curve
+    if not bt.trades.empty:
+        buys  = bt.trades[bt.trades["action"] == "BUY"]
+        sells = bt.trades[bt.trades["action"] == "SELL"]
+        if not buys.empty:
+            fig_bt.add_trace(go.Scatter(
+                x=buys["date"],
+                y=bt.equity_curve.reindex(buys["date"]).values,
+                mode="markers", name="Buy entry",
+                marker=dict(symbol="triangle-up", size=11, color="#22c55e",
+                            line=dict(width=1.5, color="white")),
+            ), row=1, col=1)
+        if not sells.empty:
+            fig_bt.add_trace(go.Scatter(
+                x=sells["date"],
+                y=bt.equity_curve.reindex(sells["date"]).values,
+                mode="markers", name="Sell exit",
+                marker=dict(symbol="triangle-down", size=11, color="#ef4444",
+                            line=dict(width=1.5, color="white")),
+            ), row=1, col=1)
+
+    # Drawdown area
+    fig_bt.add_trace(go.Scatter(
+        x=drawdown.index, y=drawdown.round(2),
+        name="Drawdown",
+        line=dict(color="#ef4444", width=1),
+        fill="tozeroy", fillcolor="rgba(239,68,68,0.15)",
+        showlegend=False,
+    ), row=2, col=1)
+    fig_bt.add_hline(y=0, line=dict(color="rgba(255,255,255,0.2)", width=1), row=2, col=1)
+
+    fig_bt.update_layout(
+        height=550,
+        template="plotly_dark",
+        margin=dict(l=0, r=0, t=30, b=0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        xaxis2_rangeslider_visible=False,
+    )
+    fig_bt.update_yaxes(title_text="Value ($)",    row=1, col=1)
+    fig_bt.update_yaxes(title_text="Drawdown (%)", row=2, col=1)
+
+    st.plotly_chart(fig_bt, use_container_width=True)
+    st.caption(
+        f"Test period: {test_df_bt.index[0].date()} → {test_df_bt.index[-1].date()}  ·  "
+        f"$10,000 initial capital  ·  0.1% transaction cost per trade  ·  no shorting"
+    )
 
 # ── Live news feed — loads after chart is visible ─────────────────────────────
 
