@@ -31,11 +31,11 @@ from src.labels import add_labels
 from src.model_lstm import TENSORFLOW_AVAILABLE
 from src.news_fetcher import daily_sentiment, fetch_news
 
-LABEL_NAME = {0: "Sell", 1: "Hold", 2: "Buy"}
+LABEL_NAME  = {0: "Sell", 1: "Hold", 2: "Buy"}
 LABEL_COLOR = {0: "#ef4444", 1: "#94a3b8", 2: "#22c55e"}
 LABEL_MARKER = {0: "triangle-down", 1: "circle", 2: "triangle-up"}
 SENTIMENT_COLOR = {"Positive": "#22c55e", "Neutral": "#94a3b8", "Negative": "#ef4444"}
-SENTIMENT_ICON = {"Positive": "🟢", "Neutral": "🟡", "Negative": "🔴"}
+SENTIMENT_ICON  = {"Positive": "🟢", "Neutral": "🟡", "Negative": "🔴"}
 
 st.set_page_config(
     page_title="ML Tech Stock Signals",
@@ -53,8 +53,7 @@ with st.sidebar:
     if not TENSORFLOW_AVAILABLE:
         st.caption("LSTM unavailable — TensorFlow not supported on Python 3.14+.")
     lookback_days = st.slider("Chart history (days)", 60, 500, 252)
-    signal_days = st.slider("Signal history (days)", 10, 90, 30)
-    show_sentiment = st.toggle("Show sentiment overlay", value=True)
+    signal_days   = st.slider("Signal history (days)", 10, 90, 30)
     st.divider()
     train_btn = st.button("🚀 Train / Retrain Models", use_container_width=True)
     st.caption("Training downloads data and fits all 3 models. Takes ~5–10 min.")
@@ -62,7 +61,7 @@ with st.sidebar:
 # ── Training ─────────────────────────────────────────────────────────────────
 
 if train_btn:
-    with st.spinner("Training Random Forest, XGBoost, and LSTM… check your terminal for progress."):
+    with st.spinner("Training… check your terminal for progress."):
         import subprocess
         result = subprocess.run(
             [sys.executable, "main.py"],
@@ -76,9 +75,10 @@ if train_btn:
         st.error("Training failed.")
         st.code(result.stderr[-3000:])
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+# ── Cached loaders ────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner="Fetching stock data…")
+# Historical price data barely changes — cache for 6 hours.
+@st.cache_data(ttl=21600, show_spinner="Fetching stock data…")
 def load_ticker(t):
     try:
         df = fetch_stock_data(t)
@@ -86,32 +86,27 @@ def load_ticker(t):
         df = add_labels(df)
         return df
     except Exception as exc:
-        # Re-raise with the real message so Streamlit shows it unredacted
         raise RuntimeError(f"Failed to load {t}: {type(exc).__name__}: {exc}") from exc
 
-
-@st.cache_data(ttl=900, show_spinner="Fetching latest news…")
+# News expires faster — cache for 30 minutes.
+@st.cache_data(ttl=1800, show_spinner=False)
 def load_news(t):
     return fetch_news(t, max_items=30)
-
 
 @st.cache_resource(show_spinner=False)
 def load_scaler():
     path = os.path.join(RESULTS_DIR, "scaler.joblib")
     return joblib.load(path) if os.path.exists(path) else None
 
-
 @st.cache_resource(show_spinner=False)
 def load_rf():
     path = os.path.join(RESULTS_DIR, "rf_model.joblib")
     return joblib.load(path) if os.path.exists(path) else None
 
-
 @st.cache_resource(show_spinner=False)
 def load_xgb():
     path = os.path.join(RESULTS_DIR, "xgb_model.joblib")
     return joblib.load(path) if os.path.exists(path) else None
-
 
 @st.cache_resource(show_spinner=False)
 def load_lstm():
@@ -124,20 +119,16 @@ def load_lstm():
     except Exception:
         return None
 
-
 def get_model(name):
-    if name == "Random Forest":
-        return load_rf()
-    if name == "XGBoost":
-        return load_xgb()
+    if name == "Random Forest": return load_rf()
+    if name == "XGBoost":       return load_xgb()
     return load_lstm()
 
+# ── Load price data (needed for chart) — news loads later ────────────────────
 
-df = load_ticker(ticker)
-news_df = load_news(ticker)
+df     = load_ticker(ticker)
 scaler = load_scaler()
-model = get_model(model_name)
-sent_daily = daily_sentiment(news_df)
+model  = get_model(model_name)
 
 # ── Predictions ───────────────────────────────────────────────────────────────
 
@@ -145,62 +136,45 @@ def predict_signals(df, model, scaler, model_name):
     valid = df.dropna(subset=FEATURE_COLS)
     if model is None or scaler is None or len(valid) == 0:
         return pd.Series(dtype=int)
-
     X = scaler.transform(valid[FEATURE_COLS].values)
-
     if model_name == "LSTM":
         if len(X) <= SEQUENCE_LEN:
             return pd.Series(dtype=int)
         seqs = np.array([X[i - SEQUENCE_LEN:i] for i in range(SEQUENCE_LEN, len(X))])
         preds = model.predict(seqs, verbose=0).argmax(axis=1)
         return pd.Series(preds, index=valid.index[SEQUENCE_LEN:])
-
     preds = model.predict(X)
     return pd.Series(preds, index=valid.index)
 
-
-signals = predict_signals(df, model, scaler, model_name)
-plot_df = df.iloc[-lookback_days:].copy()
+signals        = predict_signals(df, model, scaler, model_name)
+plot_df        = df.iloc[-lookback_days:].copy()
 recent_signals = signals[signals.index.isin(plot_df.index)]
 
-# ── Metric cards ──────────────────────────────────────────────────────────────
+# ── Metric cards (news sentiment filled in later via placeholder) ─────────────
 
 st.markdown(f"## {ticker}  —  {model_name} signals")
 
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
     latest_close = plot_df["Close"].iloc[-1]
-    prev_close = plot_df["Close"].iloc[-2]
-    delta_pct = (latest_close / prev_close - 1) * 100
+    prev_close   = plot_df["Close"].iloc[-2]
+    delta_pct    = (latest_close / prev_close - 1) * 100
     st.metric("Latest Close", f"${latest_close:.2f}", f"{delta_pct:+.2f}%")
-
 with col2:
-    if len(recent_signals):
-        latest_sig = int(recent_signals.iloc[-1])
-        st.metric("Latest Signal", LABEL_NAME[latest_sig])
-    else:
-        st.metric("Latest Signal", "—")
-
+    sig_label = LABEL_NAME[int(recent_signals.iloc[-1])] if len(recent_signals) else "—"
+    st.metric("Latest Signal", sig_label)
 with col3:
-    rsi_val = plot_df["RSI_14"].iloc[-1]
-    st.metric("RSI (14)", f"{rsi_val:.1f}")
-
+    st.metric("RSI (14)", f"{plot_df['RSI_14'].iloc[-1]:.1f}")
 with col4:
-    if not news_df.empty:
-        avg_score = news_df["sentiment_score"].mean()
-        label = "Positive" if avg_score >= 0.05 else ("Negative" if avg_score <= -0.05 else "Neutral")
-        st.metric("News Sentiment", f"{SENTIMENT_ICON[label]} {label}", f"{avg_score:+.2f}")
-    else:
-        st.metric("News Sentiment", "—")
-
+    sentiment_placeholder = st.empty()   # filled after news loads
 with col5:
     total = 3 if TENSORFLOW_AVAILABLE else 2
-    models_ready = sum([
+    ready = sum([
         os.path.exists(os.path.join(RESULTS_DIR, "rf_model.joblib")),
         os.path.exists(os.path.join(RESULTS_DIR, "xgb_model.joblib")),
         os.path.exists(os.path.join(RESULTS_DIR, "lstm_model.keras")),
     ])
-    st.metric("Models trained", f"{models_ready} / {total}")
+    st.metric("Models trained", f"{ready} / {total}")
 
 if model is None:
     st.warning(
@@ -208,34 +182,25 @@ if model is None:
         "or run `python main.py` in your terminal first."
     )
 
-# ── Main chart ────────────────────────────────────────────────────────────────
-
-n_rows = 4 if show_sentiment and not sent_daily.empty else 3
-row_heights = [0.5, 0.17, 0.17, 0.16] if n_rows == 4 else [0.6, 0.2, 0.2]
-subplot_titles = (
-    ("Price & Signals", "News Sentiment", "RSI (14)", "MACD")
-    if n_rows == 4 else
-    ("Price & Signals", "RSI (14)", "MACD")
-)
+# ── Main chart (price only — no news dependency) ──────────────────────────────
 
 fig = make_subplots(
-    rows=n_rows, cols=1,
+    rows=3, cols=1,
     shared_xaxes=True,
-    row_heights=row_heights,
+    row_heights=[0.6, 0.2, 0.2],
     vertical_spacing=0.04,
-    subplot_titles=subplot_titles,
+    subplot_titles=("Price & Signals", "RSI (14)", "MACD"),
 )
 
-# Candlestick
 fig.add_trace(go.Candlestick(
     x=plot_df.index,
     open=plot_df["Open"], high=plot_df["High"],
-    low=plot_df["Low"], close=plot_df["Close"],
-    name="OHLC", increasing_line_color="#22c55e",
+    low=plot_df["Low"],   close=plot_df["Close"],
+    name="OHLC",
+    increasing_line_color="#22c55e",
     decreasing_line_color="#ef4444",
 ), row=1, col=1)
 
-# Bollinger Bands
 fig.add_trace(go.Scatter(
     x=plot_df.index, y=plot_df["BB_upper"],
     line=dict(color="rgba(148,163,184,0.4)", width=1, dash="dot"),
@@ -247,7 +212,6 @@ fig.add_trace(go.Scatter(
     fill="tonexty", fillcolor="rgba(148,163,184,0.06)",
     name="BB Lower", showlegend=False,
 ), row=1, col=1)
-
 fig.add_trace(go.Scatter(
     x=plot_df.index, y=plot_df["SMA_20"],
     line=dict(color="#f59e0b", width=1), name="SMA 20",
@@ -257,90 +221,59 @@ fig.add_trace(go.Scatter(
     line=dict(color="#6366f1", width=1), name="SMA 50",
 ), row=1, col=1)
 
-# Signal markers
 if len(recent_signals):
     for label_id, sym in LABEL_MARKER.items():
         mask = recent_signals == label_id
         if not mask.any():
             continue
         idx = recent_signals[mask].index
-        price_offset = (
-            plot_df.loc[idx, "Low"] * 0.98
-            if label_id == 0
-            else plot_df.loc[idx, "High"] * 1.02
-        )
+        y_pos = plot_df.loc[idx, "Low"] * 0.98 if label_id == 0 else plot_df.loc[idx, "High"] * 1.02
         fig.add_trace(go.Scatter(
-            x=idx, y=price_offset, mode="markers",
+            x=idx, y=y_pos, mode="markers",
             marker=dict(symbol=sym, size=10, color=LABEL_COLOR[label_id],
                         line=dict(width=1, color="white")),
             name=LABEL_NAME[label_id],
         ), row=1, col=1)
 
-# ── Sentiment overlay row ─────────────────────────────────────────────────────
-
-sentiment_row = 2
-rsi_row = 3 if n_rows == 4 else 2
-macd_row = 4 if n_rows == 4 else 3
-
-if n_rows == 4:
-    sent_plot = sent_daily[
-        sent_daily.index >= plot_df.index.date.min()
-    ]
-    bar_colors = [
-        "#22c55e" if v >= 0.05 else ("#ef4444" if v <= -0.05 else "#94a3b8")
-        for v in sent_plot.values
-    ]
-    fig.add_trace(go.Bar(
-        x=[pd.Timestamp(d) for d in sent_plot.index],
-        y=sent_plot.values,
-        name="Daily Sentiment",
-        marker_color=bar_colors,
-        showlegend=False,
-    ), row=sentiment_row, col=1)
-    fig.add_hline(y=0, line=dict(color="white", width=0.5), row=sentiment_row, col=1)
-
-# RSI
 fig.add_trace(go.Scatter(
     x=plot_df.index, y=plot_df["RSI_14"],
     line=dict(color="#a78bfa", width=1.5), name="RSI",
-), row=rsi_row, col=1)
-fig.add_hline(y=70, line=dict(color="#ef4444", dash="dash", width=0.8), row=rsi_row, col=1)
-fig.add_hline(y=30, line=dict(color="#22c55e", dash="dash", width=0.8), row=rsi_row, col=1)
-fig.add_hrect(y0=30, y1=70, fillcolor="rgba(148,163,184,0.05)", line_width=0, row=rsi_row, col=1)
+), row=2, col=1)
+fig.add_hline(y=70, line=dict(color="#ef4444", dash="dash", width=0.8), row=2, col=1)
+fig.add_hline(y=30, line=dict(color="#22c55e", dash="dash", width=0.8), row=2, col=1)
+fig.add_hrect(y0=30, y1=70, fillcolor="rgba(148,163,184,0.05)", line_width=0, row=2, col=1)
 
-# MACD
 hist_colors = ["#22c55e" if v >= 0 else "#ef4444" for v in plot_df["MACD_hist"]]
 fig.add_trace(go.Bar(
     x=plot_df.index, y=plot_df["MACD_hist"],
     name="MACD Hist", marker_color=hist_colors, showlegend=False,
-), row=macd_row, col=1)
+), row=3, col=1)
 fig.add_trace(go.Scatter(
     x=plot_df.index, y=plot_df["MACD"],
     line=dict(color="#38bdf8", width=1.2), name="MACD",
-), row=macd_row, col=1)
+), row=3, col=1)
 fig.add_trace(go.Scatter(
     x=plot_df.index, y=plot_df["MACD_signal"],
     line=dict(color="#fb923c", width=1.2), name="Signal",
-), row=macd_row, col=1)
+), row=3, col=1)
 
 fig.update_layout(
-    height=750,
+    height=700,
     xaxis_rangeslider_visible=False,
     template="plotly_dark",
     margin=dict(l=0, r=0, t=30, b=0),
     legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
 )
 fig.update_yaxes(title_text="Price ($)", row=1, col=1)
-if n_rows == 4:
-    fig.update_yaxes(title_text="Sentiment", row=sentiment_row, col=1)
-fig.update_yaxes(title_text="RSI", row=rsi_row, col=1, range=[0, 100])
-fig.update_yaxes(title_text="MACD", row=macd_row, col=1)
+fig.update_yaxes(title_text="RSI",       row=2, col=1, range=[0, 100])
+fig.update_yaxes(title_text="MACD",      row=3, col=1)
 
+# Chart renders immediately — no news needed
 st.plotly_chart(fig, use_container_width=True)
 
 # ── Signals table  |  Feature importance ──────────────────────────────────────
 
-col_left, col_right = st.columns([1, 1])
+col_left, col_right = st.columns(2)
 
 with col_left:
     st.subheader(f"Last {signal_days} days — signals")
@@ -349,23 +282,18 @@ with col_left:
     else:
         recent = recent_signals.iloc[-signal_days:].copy()
         tbl = df.loc[recent.index, ["Close", "RSI_14", "forward_return"]].copy()
-        tbl["Signal"] = recent.map(LABEL_NAME)
-        tbl["Fwd Return"] = tbl["forward_return"].map(
-            lambda x: f"{x*100:+.2f}%" if pd.notna(x) else "—"
-        )
-        tbl["RSI"] = tbl["RSI_14"].map(lambda x: f"{x:.1f}")
-        tbl["Close"] = tbl["Close"].map(lambda x: f"${x:.2f}")
+        tbl["Signal"]     = recent.map(LABEL_NAME)
+        tbl["Fwd Return"] = tbl["forward_return"].map(lambda x: f"{x*100:+.2f}%" if pd.notna(x) else "—")
+        tbl["RSI"]        = tbl["RSI_14"].map(lambda x: f"{x:.1f}")
+        tbl["Close"]      = tbl["Close"].map(lambda x: f"${x:.2f}")
         tbl = tbl[["Close", "RSI", "Signal", "Fwd Return"]].iloc[::-1]
 
         def highlight_signal(row):
             c = {"Buy": "color: #22c55e", "Sell": "color: #ef4444", "Hold": "color: #94a3b8"}
             return ["", "", c.get(row["Signal"], ""), ""]
 
-        st.dataframe(
-            tbl.style.apply(highlight_signal, axis=1),
-            use_container_width=True,
-            height=420,
-        )
+        st.dataframe(tbl.style.apply(highlight_signal, axis=1),
+                     use_container_width=True, height=420)
 
 with col_right:
     st.subheader("Feature importance")
@@ -376,8 +304,7 @@ with col_right:
     else:
         feat_df = (
             pd.DataFrame({"Feature": FEATURE_COLS, "Importance": m.feature_importances_})
-            .sort_values("Importance", ascending=True)
-            .tail(15)
+            .sort_values("Importance", ascending=True).tail(15)
         )
         fig_imp = go.Figure(go.Bar(
             x=feat_df["Importance"], y=feat_df["Feature"],
@@ -386,29 +313,62 @@ with col_right:
         fig_imp.update_layout(
             template="plotly_dark", height=420,
             margin=dict(l=0, r=0, t=10, b=0),
-            xaxis_title="Importance", yaxis_title="",
-            title=f"{display_name} — top features",
+            xaxis_title="Importance", title=f"{display_name} — top features",
         )
         st.plotly_chart(fig_imp, use_container_width=True)
 
-# ── Live news feed ────────────────────────────────────────────────────────────
+# ── Live news feed — loads after chart is visible ─────────────────────────────
 
 st.divider()
 st.subheader(f"📰 Latest news — {ticker}")
 
+with st.spinner("Loading news…"):
+    news_df    = load_news(ticker)
+    sent_daily = daily_sentiment(news_df)
+
+# Fill in the sentiment metric card now that news is loaded
+if not news_df.empty:
+    avg_score = news_df["sentiment_score"].mean()
+    label = "Positive" if avg_score >= 0.05 else ("Negative" if avg_score <= -0.05 else "Neutral")
+    sentiment_placeholder.metric(
+        "News Sentiment",
+        f"{SENTIMENT_ICON[label]} {label}",
+        f"{avg_score:+.2f}",
+    )
+else:
+    sentiment_placeholder.metric("News Sentiment", "—")
+
 if news_df.empty:
     st.info("No news articles found.")
 else:
-    for _, row in news_df.iterrows():
-        icon = SENTIMENT_ICON[row["sentiment"]]
-        color = SENTIMENT_COLOR[row["sentiment"]]
-        ts = row["datetime"]
-        time_str = ts.strftime("%b %d, %H:%M UTC") if pd.notna(ts) else ""
-        title = row["title"] or "—"
-        link = row["link"] or ""
-        publisher = row["publisher"] or ""
+    # Compact sentiment trend bar chart
+    if not sent_daily.empty:
+        recent_sent = sent_daily.tail(30)
+        bar_colors  = ["#22c55e" if v >= 0.05 else ("#ef4444" if v <= -0.05 else "#94a3b8")
+                       for v in recent_sent.values]
+        fig_sent = go.Figure(go.Bar(
+            x=[pd.Timestamp(d) for d in recent_sent.index],
+            y=recent_sent.values,
+            marker_color=bar_colors,
+        ))
+        fig_sent.update_layout(
+            template="plotly_dark", height=180,
+            margin=dict(l=0, r=0, t=10, b=0),
+            yaxis_title="Sentiment score",
+            showlegend=False,
+        )
+        fig_sent.add_hline(y=0, line=dict(color="white", width=0.5))
+        st.plotly_chart(fig_sent, use_container_width=True)
 
-        headline = f"[{title}]({link})" if link else title
+    for _, row in news_df.iterrows():
+        icon      = SENTIMENT_ICON[row["sentiment"]]
+        color     = SENTIMENT_COLOR[row["sentiment"]]
+        ts        = row["datetime"]
+        time_str  = ts.strftime("%b %d, %H:%M UTC") if pd.notna(ts) else ""
+        title     = row["title"] or "—"
+        link      = row["link"] or ""
+        publisher = row["publisher"] or ""
+        headline  = f"[{title}]({link})" if link else title
         st.markdown(
             f"{icon} &nbsp; **{headline}**  \n"
             f"<span style='color:{color}; font-size:0.8em'>{row['sentiment']} "
