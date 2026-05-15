@@ -12,23 +12,26 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import DATA_DIR, RANDOM_SEED, RESULTS_DIR, SEQUENCE_LEN, TEST_SIZE, TICKERS
+from src.backtest import run_backtest
 from src.data_fetcher import fetch_stock_data
 from src.evaluate import plot_comparison, print_summary
 from src.features import FEATURE_COLS, add_features
+from src.fundamentals import fetch_fundamentals
 from src.labels import add_labels
 from src.model_lstm import create_sequences, evaluate_lstm, train_lstm
 from src.model_rf import evaluate_model, train_random_forest, train_xgboost
+from src.walk_forward import run_walk_forward
 
 
 def _prepare_data():
-    from sklearn.preprocessing import StandardScaler
-
     frames = []
     print("Fetching and processing stock data...")
     for ticker in TICKERS:
         print(f"  {ticker}...", end=" ", flush=True)
         df = fetch_stock_data(ticker)
         df = add_features(df)
+        fund = fetch_fundamentals(ticker, df)
+        df = df.join(fund, how="left")
         df = add_labels(df)
         df["Ticker"] = ticker
         frames.append(df)
@@ -82,6 +85,21 @@ def _build_lstm_sequences(train_df, test_df, scaler):
     )
 
 
+def _print_backtest(ticker, signals, prices):
+    if len(signals) < 10:
+        return
+    bt = run_backtest(signals, prices)
+    alpha = bt.total_return - bt.benchmark_return
+    print(
+        f"  {ticker:<5}  strategy {bt.total_return*100:+6.1f}%  "
+        f"B&H {bt.benchmark_return*100:+6.1f}%  "
+        f"alpha {alpha*100:+5.1f}%  "
+        f"Sharpe {bt.sharpe_ratio:+.2f}  "
+        f"MaxDD {bt.max_drawdown*100:.1f}%  "
+        f"trades {bt.num_trades}  win {bt.win_rate*100:.0f}%"
+    )
+
+
 def main():
     np.random.seed(RANDOM_SEED)
     os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -126,22 +144,39 @@ def main():
         print("\nBuilding LSTM sequences...")
         Xtr, ytr, Xte, yte = _build_lstm_sequences(train_df, test_df, scaler)
         print(f"LSTM sequences — train: {Xtr.shape}, test: {Xte.shape}")
-
         val_cut = int(0.1 * len(Xtr))
         Xval, yval = Xtr[-val_cut:], ytr[-val_cut:]
         Xtr2, ytr2 = Xtr[:-val_cut], ytr[:-val_cut]
-
         print("\nTraining LSTM...")
         lstm = train_lstm(Xtr2, ytr2, Xval, yval, epochs=30, batch_size=64)
         lstm.save(os.path.join(RESULTS_DIR, "lstm_model.keras"))
-
         lstm_preds, lstm_acc = evaluate_lstm(lstm, Xte, yte)
         results.append(("LSTM", yte, lstm_preds, lstm_acc))
     else:
-        print("\nSkipping LSTM — TensorFlow not installed (not supported on Python 3.14+).")
+        print("\nSkipping LSTM — TensorFlow not installed.")
 
     print_summary(results)
     plot_comparison(results)
+
+    # ── Walk-forward validation ───────────────────────────────────────────────
+    print("\n" + "=" * 60)
+    print("WALK-FORWARD VALIDATION  (XGBoost, 5 folds)")
+    print("=" * 60)
+    wf = run_walk_forward(data, model_type="xgboost", n_splits=5)
+    print(f"\nOverall OOS accuracy: {wf['oos_accuracy']:.4f}")
+    print("\nFold breakdown:")
+    print(wf["folds"].to_string(index=False))
+
+    # ── Backtest on walk-forward OOS signals ──────────────────────────────────
+    print("\n" + "=" * 60)
+    print("BACKTEST  (walk-forward OOS signals, $10,000 initial capital)")
+    print("=" * 60)
+    for ticker in TICKERS:
+        ticker_mask = data["Ticker"] == ticker
+        ticker_data = data[ticker_mask]
+        oos_sigs = wf["predictions"].reindex(ticker_data.index)
+        valid = oos_sigs[oos_sigs >= 0]
+        _print_backtest(ticker, valid, ticker_data.loc[valid.index, "Close"])
 
 
 if __name__ == "__main__":

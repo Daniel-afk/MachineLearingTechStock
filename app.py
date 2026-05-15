@@ -25,8 +25,10 @@ from plotly.subplots import make_subplots
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import RESULTS_DIR, SEQUENCE_LEN, TICKERS
+from src.backtest import run_backtest
 from src.data_fetcher import fetch_stock_data
 from src.features import FEATURE_COLS, add_features
+from src.fundamentals import fetch_fundamentals
 from src.labels import add_labels
 from src.model_lstm import TENSORFLOW_AVAILABLE
 from src.news_fetcher import daily_sentiment, fetch_news
@@ -83,6 +85,8 @@ def load_ticker(t):
     try:
         df = fetch_stock_data(t)
         df = add_features(df)
+        fund = fetch_fundamentals(t, df)
+        df = df.join(fund, how="left")
         df = add_labels(df)
         return df
     except Exception as exc:
@@ -316,6 +320,79 @@ with col_right:
             xaxis_title="Importance", title=f"{display_name} — top features",
         )
         st.plotly_chart(fig_imp, use_container_width=True)
+
+# ── Backtest ─────────────────────────────────────────────────────────────────
+
+with st.expander("📊 Backtest — Strategy vs Buy & Hold", expanded=True):
+    from config import TEST_SIZE
+    if model is None or scaler is None:
+        st.info("Train models first to see backtest results.")
+    elif len(signals) < 20:
+        st.info("Not enough signal data. Train models first.")
+    else:
+        n_test = int(len(df) * TEST_SIZE)
+        test_df_bt = df.iloc[-n_test:]
+        test_sigs = signals[signals.index.isin(test_df_bt.index)]
+        test_prices = test_df_bt["Close"].reindex(test_sigs.index)
+
+        bt = run_backtest(test_sigs, test_prices)
+
+        alpha = bt.total_return - bt.benchmark_return
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric(
+            "Strategy return",
+            f"{bt.total_return*100:+.1f}%",
+            f"α {alpha*100:+.1f}% vs B&H",
+        )
+        c2.metric("Sharpe ratio", f"{bt.sharpe_ratio:.2f}")
+        c3.metric("Max drawdown", f"{bt.max_drawdown*100:.1f}%")
+        c4.metric(
+            "Win rate",
+            f"{bt.win_rate*100:.0f}%",
+            f"{bt.num_trades} trades",
+        )
+
+        fig_bt = go.Figure()
+        fig_bt.add_trace(go.Scatter(
+            x=bt.equity_curve.index, y=bt.equity_curve.round(2),
+            name="Strategy", line=dict(color="#22c55e", width=2),
+            fill="tozeroy", fillcolor="rgba(34,197,94,0.07)",
+        ))
+        fig_bt.add_trace(go.Scatter(
+            x=bt.benchmark_curve.index, y=bt.benchmark_curve.round(2),
+            name="Buy & Hold", line=dict(color="#6366f1", width=2, dash="dash"),
+        ))
+
+        # Mark buy and sell trades on chart
+        if not bt.trades.empty:
+            buys  = bt.trades[bt.trades["action"] == "BUY"]
+            sells = bt.trades[bt.trades["action"] == "SELL"]
+            if not buys.empty:
+                buy_vals = bt.equity_curve.reindex(buys["date"]).values
+                fig_bt.add_trace(go.Scatter(
+                    x=buys["date"], y=buy_vals, mode="markers",
+                    name="Buy", marker=dict(symbol="triangle-up", size=10,
+                                            color="#22c55e", line=dict(width=1, color="white")),
+                ))
+            if not sells.empty:
+                sell_vals = bt.equity_curve.reindex(sells["date"]).values
+                fig_bt.add_trace(go.Scatter(
+                    x=sells["date"], y=sell_vals, mode="markers",
+                    name="Sell", marker=dict(symbol="triangle-down", size=10,
+                                             color="#ef4444", line=dict(width=1, color="white")),
+                ))
+
+        fig_bt.update_layout(
+            template="plotly_dark", height=380,
+            yaxis_title="Portfolio value ($)",
+            margin=dict(l=0, r=0, t=10, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0),
+        )
+        st.plotly_chart(fig_bt, use_container_width=True)
+        st.caption(
+            f"Test period: {test_df_bt.index[0].date()} → {test_df_bt.index[-1].date()}  |  "
+            f"$10,000 initial capital  |  0.1% transaction cost per trade"
+        )
 
 # ── Live news feed — loads after chart is visible ─────────────────────────────
 

@@ -70,4 +70,7 @@ FEATURE_COLS = [
     "ATR_14", "OBV", "Vol_ratio",
     "Return_1d", "Return_5d", "Return_10d", "Return_20d",
     "Price_SMA20_ratio", "Price_SMA50_ratio",
+    # Fundamental features (quarterly, forward-filled to daily)
+    "PE_ratio", "PB_ratio", "Revenue_growth",
+    "Profit_margin", "Debt_to_equity", "ROE",
 ]
