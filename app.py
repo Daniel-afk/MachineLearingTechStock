@@ -24,7 +24,7 @@ from plotly.subplots import make_subplots
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import RESULTS_DIR, SEQUENCE_LEN, TICKERS
+from config import CRYPTO_TICKERS, RESULTS_DIR, SEQUENCE_LEN, TICKERS
 from src.backtest import run_backtest
 from src.data_fetcher import fetch_stock_data
 from src.features import FEATURE_COLS, add_features
@@ -40,7 +40,7 @@ SENTIMENT_COLOR = {"Positive": "#22c55e", "Neutral": "#94a3b8", "Negative": "#ef
 SENTIMENT_ICON  = {"Positive": "🟢", "Neutral": "🟡", "Negative": "🔴"}
 
 st.set_page_config(
-    page_title="ML Tech Stock Signals",
+    page_title="ML Stock & Crypto Signals",
     page_icon="📈",
     layout="wide",
 )
@@ -48,17 +48,21 @@ st.set_page_config(
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.title("📈 Tech Stock ML")
-    ticker = st.selectbox("Stock", TICKERS)
+    st.title("📈 Tech Stock & Crypto ML")
+    asset_class = st.radio("Asset class", ["Stocks", "Crypto"], horizontal=True)
+    ticker_list = TICKERS if asset_class == "Stocks" else CRYPTO_TICKERS
+    ticker = st.selectbox("Ticker", ticker_list)
     available_models = ["Random Forest", "XGBoost"] + (["LSTM"] if TENSORFLOW_AVAILABLE else [])
     model_name = st.selectbox("Model", available_models)
     if not TENSORFLOW_AVAILABLE:
         st.caption("LSTM unavailable — TensorFlow not supported on Python 3.14+.")
     lookback_days = st.slider("Chart history (days)", 60, 500, 252)
     signal_days   = st.slider("Signal history (days)", 10, 90, 30)
+    if asset_class == "Crypto":
+        st.info("Crypto uses ±5% thresholds over 3-day windows (vs ±2% / 5-day for stocks).")
     st.divider()
     train_btn = st.button("🚀 Train / Retrain Models", use_container_width=True)
-    st.caption("Training downloads data and fits all 3 models. Takes ~5–10 min.")
+    st.caption("Trains on all stocks + crypto. Takes ~10–15 min.")
 
 # ── Training ─────────────────────────────────────────────────────────────────
 
@@ -80,14 +84,14 @@ if train_btn:
 # ── Cached loaders ────────────────────────────────────────────────────────────
 
 # Historical price data barely changes — cache for 6 hours.
-@st.cache_data(ttl=21600, show_spinner="Fetching stock data…")
+@st.cache_data(ttl=21600, show_spinner="Fetching data…")
 def load_ticker(t):
     try:
         df = fetch_stock_data(t)
         df = add_features(df)
         fund = fetch_fundamentals(t, df)
         df = df.join(fund, how="left")
-        df = add_labels(df)
+        df = add_labels(df, t)
         return df
     except Exception as exc:
         raise RuntimeError(f"Failed to load {t}: {type(exc).__name__}: {exc}") from exc

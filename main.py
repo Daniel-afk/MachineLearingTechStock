@@ -11,7 +11,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import DATA_DIR, RANDOM_SEED, RESULTS_DIR, SEQUENCE_LEN, TEST_SIZE, TICKERS
+from config import DATA_DIR, RANDOM_SEED, RESULTS_DIR, SEQUENCE_LEN, TEST_SIZE, TICKERS, CRYPTO_TICKERS
 from src.backtest import run_backtest
 from src.data_fetcher import fetch_stock_data
 from src.evaluate import plot_comparison, print_summary
@@ -25,14 +25,15 @@ from src.walk_forward import run_walk_forward
 
 def _prepare_data():
     frames = []
-    print("Fetching and processing stock data...")
-    for ticker in TICKERS:
+    all_tickers = TICKERS + CRYPTO_TICKERS
+    print("Fetching and processing stock + crypto data...")
+    for ticker in all_tickers:
         print(f"  {ticker}...", end=" ", flush=True)
         df = fetch_stock_data(ticker)
         df = add_features(df)
         fund = fetch_fundamentals(ticker, df)
         df = df.join(fund, how="left")
-        df = add_labels(df)
+        df = add_labels(df, ticker)
         df["Ticker"] = ticker
         frames.append(df)
         print("done")
@@ -171,7 +172,7 @@ def main():
     print("\n" + "=" * 60)
     print("BACKTEST  (walk-forward OOS signals, $10,000 initial capital)")
     print("=" * 60)
-    for ticker in TICKERS:
+    for ticker in TICKERS + CRYPTO_TICKERS:
         ticker_mask = data["Ticker"] == ticker
         ticker_data = data[ticker_mask]
         oos_sigs = wf["predictions"].reindex(ticker_data.index)
