@@ -71,9 +71,11 @@ def run_walk_forward(
     oos_mask = all_preds >= 0
     oos_acc = accuracy_score(y[oos_mask], all_preds[oos_mask])
 
+    # Use a RangeIndex so callers can safely align via boolean masks on the
+    # original valid-data slice without hitting duplicate-date errors.
     return {
         "folds": pd.DataFrame(fold_rows),
         "oos_accuracy": oos_acc,
-        "predictions": pd.Series(all_preds, index=dates),
-        "actuals": pd.Series(y, index=dates),
+        "predictions": pd.Series(all_preds, index=range(len(all_preds))),
+        "actuals": pd.Series(y, index=range(len(y))),
     }

@@ -172,12 +172,20 @@ def main():
     print("\n" + "=" * 60)
     print("BACKTEST  (walk-forward OOS signals, $10,000 initial capital)")
     print("=" * 60)
+    # wf["predictions"] shares the same positional index as the valid subset
+    # of `data`. Use boolean masking on that subset to avoid duplicate-date
+    # issues when multiple tickers share the same calendar dates.
+    valid_data = data.dropna(subset=FEATURE_COLS + ["label"]).reset_index(drop=False)
+    pred_series = wf["predictions"]   # RangeIndex aligned with valid_data
     for ticker in TICKERS + CRYPTO_TICKERS:
-        ticker_mask = data["Ticker"] == ticker
-        ticker_data = data[ticker_mask]
-        oos_sigs = wf["predictions"].reindex(ticker_data.index)
-        valid = oos_sigs[oos_sigs >= 0]
-        _print_backtest(ticker, valid, ticker_data.loc[valid.index, "Close"])
+        mask = (valid_data["Ticker"] == ticker).values
+        sigs   = pred_series[mask].reset_index(drop=True)
+        prices = valid_data.loc[mask, "Close"].reset_index(drop=True)
+        dates  = valid_data.loc[mask, "index"].reset_index(drop=True)
+        oos    = sigs >= 0
+        sigs_oos   = pd.Series(sigs[oos].values,   index=dates[oos].values)
+        prices_oos = pd.Series(prices[oos].values, index=dates[oos].values)
+        _print_backtest(ticker, sigs_oos, prices_oos)
 
 
 if __name__ == "__main__":
