@@ -158,6 +158,84 @@ signals        = predict_signals(df, model, scaler, model_name)
 plot_df        = df.iloc[-lookback_days:].copy()
 recent_signals = signals[signals.index.isin(plot_df.index)]
 
+# ── How it works ──────────────────────────────────────────────────────────────
+
+with st.expander("ℹ️ How the ML works", expanded=False):
+    is_crypto = ticker in CRYPTO_TICKERS
+    fwd_days  = 3 if is_crypto else 5
+    threshold = "5%" if is_crypto else "2%"
+    st.markdown(f"""
+### What this app does
+This dashboard uses **machine learning** to predict whether a stock or crypto asset
+is likely to go **Up (Buy)**, **Down (Sell)**, or **stay flat (Hold)** over the next
+**{fwd_days} trading days**.  It is trained on historical price data from 2018 to 2024
+and evaluates each day using technical indicators and fundamental data.
+
+---
+
+### Step 1 — Data
+Every day of price history (Open, High, Low, Close, Volume) is downloaded from
+**Yahoo Finance** using `yfinance`. For stocks, quarterly earnings data (P/E ratio,
+revenue growth, profit margin, debt/equity, ROE, P/B ratio) is also fetched and
+forward-filled so the model knows the financial health of the company.
+Crypto assets skip the fundamental step since they have no earnings.
+
+### Step 2 — Features (what the model sees)
+The raw price data is transformed into **26 signals** the model can learn from:
+
+| Category | Features |
+|---|---|
+| Trend | SMA 20, SMA 50, EMA 12, EMA 26, price-to-SMA ratios |
+| Momentum | MACD, MACD signal, MACD histogram, RSI(14) |
+| Volatility | Bollinger Bands (upper/lower/% position), ATR(14) |
+| Volume | On-Balance Volume (OBV), volume ratio vs 20-day avg |
+| Returns | 1-day, 5-day, 10-day, 20-day price returns |
+| Fundamentals | P/E, P/B, revenue growth, profit margin, debt/equity, ROE *(stocks only)* |
+
+### Step 3 — Labels (what the model is trying to predict)
+Each day is labelled based on what the price actually did **{fwd_days} days later**:
+
+| Label | Condition |
+|---|---|
+| 🟢 **Buy** | Price rose more than **+{threshold}** |
+| 🔴 **Sell** | Price fell more than **−{threshold}** |
+| 🟡 **Hold** | Price moved less than **±{threshold}** |
+
+{"*Crypto uses wider ±5% thresholds over 3 days because it is far more volatile than stocks.*" if is_crypto else ""}
+
+### Step 4 — Models
+Three models are trained and compared:
+
+- **Random Forest** — builds hundreds of decision trees and votes. Fast, robust,
+  resistant to overfitting. Good at capturing non-linear relationships in tabular data.
+- **XGBoost** — a boosted tree ensemble that learns from its own mistakes
+  iteration by iteration. Usually the most accurate on structured financial data.
+- **LSTM** *(if TensorFlow is available)* — a Recurrent Neural Network that reads
+  60 days of price history as a sequence. Better at capturing momentum patterns
+  that unfold over time.
+
+### Step 5 — Walk-forward validation
+Instead of a simple 80/20 train/test split, the model is also evaluated with
+**walk-forward validation** — the data is divided into 5 time-ordered folds,
+and the model is always tested on future data it has never seen during training.
+This gives a much more honest estimate of real-world performance.
+
+### Step 6 — Backtest
+The predicted signals are turned into a simulated trading strategy:
+- **Buy signal** → invest full portfolio at today's close
+- **Sell signal** → sell entire position at today's close
+- **Hold** → do nothing
+- A **0.1% transaction cost** is applied to every trade
+
+The equity curve and drawdown chart show how $10,000 would have grown (or
+shrunk) compared to simply buying and holding the asset for the same period.
+
+---
+
+⚠️ **Disclaimer:** This is a research and education tool. Past model performance
+does not guarantee future returns. Do not use these signals as financial advice.
+    """)
+
 # ── Metric cards (news sentiment filled in later via placeholder) ─────────────
 
 st.markdown(f"## {ticker}  —  {model_name} signals")
