@@ -63,8 +63,8 @@ with st.sidebar:
     st.divider()
     train_btn = st.button("🚀 Train / Retrain Models", use_container_width=True)
     st.caption(
-        "Trains **one shared model** on all 7 stocks + 6 crypto assets combined "
-        "(~50k rows). The ticker above only controls what's displayed — not what's trained."
+        "Trains a **separate model for each asset** — AAPL learns only from AAPL, "
+        "BTC only from BTC, etc. Covers all 13 assets in one run (~10–15 min)."
     )
 
 # ── Training ─────────────────────────────────────────────────────────────────
@@ -86,6 +86,9 @@ if train_btn:
 
 # ── Cached loaders ────────────────────────────────────────────────────────────
 
+def _safe(t: str) -> str:
+    return t.replace("-", "_")
+
 # Historical price data barely changes — cache for 6 hours.
 @st.cache_data(ttl=21600, show_spinner="Fetching data…")
 def load_ticker(t):
@@ -105,41 +108,30 @@ def load_news(t):
     return fetch_news(t, max_items=30)
 
 @st.cache_resource(show_spinner=False)
-def load_scaler():
-    path = os.path.join(RESULTS_DIR, "scaler.joblib")
+def load_scaler(t):
+    path = os.path.join(RESULTS_DIR, f"scaler_{_safe(t)}.joblib")
     return joblib.load(path) if os.path.exists(path) else None
 
 @st.cache_resource(show_spinner=False)
-def load_rf():
-    path = os.path.join(RESULTS_DIR, "rf_model.joblib")
+def load_rf(t):
+    path = os.path.join(RESULTS_DIR, f"rf_{_safe(t)}.joblib")
     return joblib.load(path) if os.path.exists(path) else None
 
 @st.cache_resource(show_spinner=False)
-def load_xgb():
-    path = os.path.join(RESULTS_DIR, "xgb_model.joblib")
+def load_xgb(t):
+    path = os.path.join(RESULTS_DIR, f"xgb_{_safe(t)}.joblib")
     return joblib.load(path) if os.path.exists(path) else None
 
-@st.cache_resource(show_spinner=False)
-def load_lstm():
-    path = os.path.join(RESULTS_DIR, "lstm_model.keras")
-    if not os.path.exists(path):
-        return None
-    try:
-        from tensorflow import keras
-        return keras.models.load_model(path)
-    except Exception:
-        return None
-
-def get_model(name):
-    if name == "Random Forest": return load_rf()
-    if name == "XGBoost":       return load_xgb()
-    return load_lstm()
+def get_model(name, t):
+    if name == "Random Forest": return load_rf(t)
+    if name == "XGBoost":       return load_xgb(t)
+    return None  # LSTM not trained per-ticker
 
 # ── Load price data (needed for chart) — news loads later ────────────────────
 
 df     = load_ticker(ticker)
-scaler = load_scaler()
-model  = get_model(model_name)
+scaler = load_scaler(ticker)
+model  = get_model(model_name, ticker)
 
 # ── Predictions ───────────────────────────────────────────────────────────────
 
@@ -207,15 +199,16 @@ Each day is labelled based on what the price actually did **{fwd_days} days late
 {"*Crypto uses wider ±5% thresholds over 3 days because it is far more volatile than stocks.*" if is_crypto else ""}
 
 ### Step 4 — Models
-Three models are trained and compared:
+**Each asset gets its own dedicated model** — AAPL's model only learned from AAPL
+data, BTC's only from BTC, and so on. This means each model is specialised to
+that asset's unique behaviour and volatility regime.
+
+Two model types are trained per asset:
 
 - **Random Forest** — builds hundreds of decision trees and votes. Fast, robust,
   resistant to overfitting. Good at capturing non-linear relationships in tabular data.
 - **XGBoost** — a boosted tree ensemble that learns from its own mistakes
   iteration by iteration. Usually the most accurate on structured financial data.
-- **LSTM** *(if TensorFlow is available)* — a Recurrent Neural Network that reads
-  60 days of price history as a sequence. Better at capturing momentum patterns
-  that unfold over time.
 
 ### Step 5 — Walk-forward validation
 Instead of a simple 80/20 train/test split, the model is also evaluated with
@@ -257,13 +250,10 @@ with col3:
 with col4:
     sentiment_placeholder = st.empty()   # filled after news loads
 with col5:
-    total = 3 if TENSORFLOW_AVAILABLE else 2
-    ready = sum([
-        os.path.exists(os.path.join(RESULTS_DIR, "rf_model.joblib")),
-        os.path.exists(os.path.join(RESULTS_DIR, "xgb_model.joblib")),
-        os.path.exists(os.path.join(RESULTS_DIR, "lstm_model.keras")),
-    ])
-    st.metric("Models trained", f"{ready} / {total}")
+    rf_ready  = os.path.exists(os.path.join(RESULTS_DIR, f"rf_{_safe(ticker)}.joblib"))
+    xgb_ready = os.path.exists(os.path.join(RESULTS_DIR, f"xgb_{_safe(ticker)}.joblib"))
+    ready = sum([rf_ready, xgb_ready])
+    st.metric("Models trained", f"{ready} / 2", f"for {ticker}")
 
 if model is None:
     st.warning(
@@ -386,8 +376,8 @@ with col_left:
 
 with col_right:
     st.subheader("Feature importance")
-    m = load_rf() if model_name in ("Random Forest", "LSTM") else load_xgb()
-    display_name = "Random Forest" if model_name in ("Random Forest", "LSTM") else "XGBoost"
+    m = load_rf(ticker) if model_name == "Random Forest" else load_xgb(ticker)
+    display_name = model_name
     if m is None:
         st.info("Train models to see feature importance.")
     else:

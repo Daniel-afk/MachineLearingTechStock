@@ -11,90 +11,86 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import DATA_DIR, RANDOM_SEED, RESULTS_DIR, SEQUENCE_LEN, TEST_SIZE, TICKERS, CRYPTO_TICKERS
+from config import CRYPTO_TICKERS, DATA_DIR, RANDOM_SEED, RESULTS_DIR, TEST_SIZE, TICKERS
 from src.backtest import run_backtest
 from src.data_fetcher import fetch_stock_data
-from src.evaluate import plot_comparison, print_summary
 from src.features import FEATURE_COLS, add_features
 from src.fundamentals import fetch_fundamentals
 from src.labels import add_labels
-from src.model_lstm import create_sequences, evaluate_lstm, train_lstm
 from src.model_rf import evaluate_model, train_random_forest, train_xgboost
 from src.walk_forward import run_walk_forward
 
 
-def _prepare_data():
-    frames = []
-    all_tickers = TICKERS + CRYPTO_TICKERS
-    print("Fetching and processing stock + crypto data...")
-    for ticker in all_tickers:
-        print(f"  {ticker}...", end=" ", flush=True)
-        df = fetch_stock_data(ticker)
-        df = add_features(df)
-        fund = fetch_fundamentals(ticker, df)
-        df = df.join(fund, how="left")
-        df = add_labels(df, ticker)
-        df["Ticker"] = ticker
-        frames.append(df)
-        print("done")
-
-    data = pd.concat(frames).sort_index()
-    data = data.dropna(subset=FEATURE_COLS + ["label"])
-    return data
+def safe_name(ticker: str) -> str:
+    return ticker.replace("-", "_")
 
 
-def _time_split(data: pd.DataFrame):
-    data = data.sort_index()
+def _prepare_ticker(ticker: str) -> pd.DataFrame:
+    df = fetch_stock_data(ticker)
+    df = add_features(df)
+    fund = fetch_fundamentals(ticker, df)
+    df = df.join(fund, how="left")
+    df = add_labels(df, ticker)
+    return df.dropna(subset=FEATURE_COLS + ["label"])
+
+
+def _train_ticker(ticker: str, data: pd.DataFrame) -> list:
+    from sklearn.preprocessing import StandardScaler
+
+    if len(data) < 200:
+        print(f"  Skipping — only {len(data)} rows")
+        return []
+
     split_idx = int(len(data) * (1 - TEST_SIZE))
-    return data.iloc[:split_idx], data.iloc[split_idx:]
+    train_df, test_df = data.iloc[:split_idx], data.iloc[split_idx:]
+
+    X_train = train_df[FEATURE_COLS].values
+    y_train = train_df["label"].values.astype(int)
+    X_test  = test_df[FEATURE_COLS].values
+    y_test  = test_df["label"].values.astype(int)
+
+    scaler = StandardScaler()
+    X_tr_sc = scaler.fit_transform(X_train)
+    X_te_sc = scaler.transform(X_test)
+    joblib.dump(scaler, os.path.join(RESULTS_DIR, f"scaler_{safe_name(ticker)}.joblib"))
+
+    results = []
+
+    print(f"  Training Random Forest...")
+    rf = train_random_forest(X_tr_sc, y_train)
+    rf_preds, rf_acc = evaluate_model(rf, X_te_sc, y_test, f"Random Forest [{ticker}]")
+    joblib.dump(rf, os.path.join(RESULTS_DIR, f"rf_{safe_name(ticker)}.joblib"))
+    results.append(("Random Forest", y_test, rf_preds, rf_acc))
+
+    print(f"  Training XGBoost...")
+    xgb = train_xgboost(X_tr_sc, y_train)
+    xgb_preds, xgb_acc = evaluate_model(xgb, X_te_sc, y_test, f"XGBoost [{ticker}]")
+    joblib.dump(xgb, os.path.join(RESULTS_DIR, f"xgb_{safe_name(ticker)}.joblib"))
+    results.append(("XGBoost", y_test, xgb_preds, xgb_acc))
+
+    return results
 
 
-def _build_lstm_sequences(train_df, test_df, scaler):
-    train_X_seqs, train_y_seqs = [], []
-    test_X_seqs, test_y_seqs = [], []
+def _walk_and_backtest(ticker: str, data: pd.DataFrame):
+    print(f"  Walk-forward validation (4 folds)...")
+    wf = run_walk_forward(data, model_type="xgboost", n_splits=4)
+    print(f"  OOS accuracy: {wf['oos_accuracy']:.4f}")
+    print(wf["folds"].to_string(index=False))
 
-    for ticker in TICKERS:
-        t_train = train_df[train_df["Ticker"] == ticker]
-        t_test = test_df[test_df["Ticker"] == ticker]
+    valid = data.reset_index(drop=False)
+    date_col = valid.columns[0]
+    preds = wf["predictions"]
+    oos = preds >= 0
+    dates  = valid.loc[oos.values, date_col].values
+    sigs   = pd.Series(preds[oos].values,              index=dates)
+    prices = pd.Series(valid.loc[oos.values, "Close"].values, index=dates)
 
-        if len(t_train) <= SEQUENCE_LEN or len(t_test) == 0:
-            continue
-
-        Xt = scaler.transform(t_train[FEATURE_COLS].values)
-        yt = t_train["label"].values.astype(int)
-        Xe = scaler.transform(t_test[FEATURE_COLS].values)
-        ye = t_test["label"].values.astype(int)
-
-        Xs_tr, ys_tr = create_sequences(Xt, yt, SEQUENCE_LEN)
-        train_X_seqs.append(Xs_tr)
-        train_y_seqs.append(ys_tr)
-
-        combined_X = np.vstack([Xt, Xe])
-        combined_y = np.concatenate([yt, ye])
-        Xs_all, ys_all = create_sequences(combined_X, combined_y, SEQUENCE_LEN)
-        Xs_te = Xs_all[len(ys_tr):]
-        ys_te = ys_all[len(ys_tr):]
-
-        test_X_seqs.append(Xs_te)
-        test_y_seqs.append(ys_te)
-
-    return (
-        np.concatenate(train_X_seqs),
-        np.concatenate(train_y_seqs),
-        np.concatenate(test_X_seqs),
-        np.concatenate(test_y_seqs),
-    )
-
-
-def _print_backtest(ticker, signals, prices):
-    if len(signals) < 10:
-        return
-    bt = run_backtest(signals, prices)
+    bt = run_backtest(sigs, prices)
     alpha = bt.total_return - bt.benchmark_return
     print(
-        f"  {ticker:<5}  strategy {bt.total_return*100:+6.1f}%  "
-        f"B&H {bt.benchmark_return*100:+6.1f}%  "
-        f"alpha {alpha*100:+5.1f}%  "
+        f"  Backtest → strategy {bt.total_return*100:+.1f}%  "
+        f"B&H {bt.benchmark_return*100:+.1f}%  "
+        f"α {alpha*100:+.1f}%  "
         f"Sharpe {bt.sharpe_ratio:+.2f}  "
         f"MaxDD {bt.max_drawdown*100:.1f}%  "
         f"trades {bt.num_trades}  win {bt.win_rate*100:.0f}%"
@@ -106,86 +102,28 @@ def main():
     os.makedirs(RESULTS_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    data = _prepare_data()
-    print(f"\nTotal samples: {len(data)}")
-    dist = data["label"].value_counts().sort_index().rename({0: "Sell", 1: "Hold", 2: "Buy"})
-    print(f"Label distribution:\n{dist}\n")
+    summary = []
 
-    train_df, test_df = _time_split(data)
-    print(f"Train rows: {len(train_df)}  |  Test rows: {len(test_df)}")
-
-    from sklearn.preprocessing import StandardScaler
-
-    X_train = train_df[FEATURE_COLS].values
-    y_train = train_df["label"].values.astype(int)
-    X_test = test_df[FEATURE_COLS].values
-    y_test = test_df["label"].values.astype(int)
-
-    scaler = StandardScaler()
-    X_train_sc = scaler.fit_transform(X_train)
-    X_test_sc = scaler.transform(X_test)
-    joblib.dump(scaler, os.path.join(RESULTS_DIR, "scaler.joblib"))
-
-    results = []
-
-    print("\nTraining Random Forest...")
-    rf = train_random_forest(X_train_sc, y_train)
-    rf_preds, rf_acc = evaluate_model(rf, X_test_sc, y_test, "Random Forest")
-    joblib.dump(rf, os.path.join(RESULTS_DIR, "rf_model.joblib"))
-    results.append(("Random Forest", y_test, rf_preds, rf_acc))
-
-    print("\nTraining XGBoost...")
-    xgb = train_xgboost(X_train_sc, y_train)
-    xgb_preds, xgb_acc = evaluate_model(xgb, X_test_sc, y_test, "XGBoost")
-    joblib.dump(xgb, os.path.join(RESULTS_DIR, "xgb_model.joblib"))
-    results.append(("XGBoost", y_test, xgb_preds, xgb_acc))
-
-    from src.model_lstm import TENSORFLOW_AVAILABLE
-    if TENSORFLOW_AVAILABLE:
-        print("\nBuilding LSTM sequences...")
-        Xtr, ytr, Xte, yte = _build_lstm_sequences(train_df, test_df, scaler)
-        print(f"LSTM sequences — train: {Xtr.shape}, test: {Xte.shape}")
-        val_cut = int(0.1 * len(Xtr))
-        Xval, yval = Xtr[-val_cut:], ytr[-val_cut:]
-        Xtr2, ytr2 = Xtr[:-val_cut], ytr[:-val_cut]
-        print("\nTraining LSTM...")
-        lstm = train_lstm(Xtr2, ytr2, Xval, yval, epochs=30, batch_size=64)
-        lstm.save(os.path.join(RESULTS_DIR, "lstm_model.keras"))
-        lstm_preds, lstm_acc = evaluate_lstm(lstm, Xte, yte)
-        results.append(("LSTM", yte, lstm_preds, lstm_acc))
-    else:
-        print("\nSkipping LSTM — TensorFlow not installed.")
-
-    print_summary(results)
-    plot_comparison(results)
-
-    # ── Walk-forward validation ───────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print("WALK-FORWARD VALIDATION  (XGBoost, 5 folds)")
-    print("=" * 60)
-    wf = run_walk_forward(data, model_type="xgboost", n_splits=5)
-    print(f"\nOverall OOS accuracy: {wf['oos_accuracy']:.4f}")
-    print("\nFold breakdown:")
-    print(wf["folds"].to_string(index=False))
-
-    # ── Backtest on walk-forward OOS signals ──────────────────────────────────
-    print("\n" + "=" * 60)
-    print("BACKTEST  (walk-forward OOS signals, $10,000 initial capital)")
-    print("=" * 60)
-    # wf["predictions"] shares the same positional index as the valid subset
-    # of `data`. Use boolean masking on that subset to avoid duplicate-date
-    # issues when multiple tickers share the same calendar dates.
-    valid_data = data.dropna(subset=FEATURE_COLS + ["label"]).reset_index(drop=False)
-    pred_series = wf["predictions"]   # RangeIndex aligned with valid_data
     for ticker in TICKERS + CRYPTO_TICKERS:
-        mask = (valid_data["Ticker"] == ticker).values
-        sigs   = pred_series[mask].reset_index(drop=True)
-        prices = valid_data.loc[mask, "Close"].reset_index(drop=True)
-        dates  = valid_data.loc[mask, "index"].reset_index(drop=True)
-        oos    = sigs >= 0
-        sigs_oos   = pd.Series(sigs[oos].values,   index=dates[oos].values)
-        prices_oos = pd.Series(prices[oos].values, index=dates[oos].values)
-        _print_backtest(ticker, sigs_oos, prices_oos)
+        print(f"\n{'='*60}")
+        print(f"  {ticker}")
+        print(f"{'='*60}")
+
+        data = _prepare_ticker(ticker)
+        dist = data["label"].value_counts().sort_index().rename({0: "Sell", 1: "Hold", 2: "Buy"})
+        print(f"  Rows: {len(data)}  |  Labels: {dict(dist)}")
+
+        results = _train_ticker(ticker, data)
+        for name, _, _, acc in results:
+            summary.append({"Ticker": ticker, "Model": name, "Test Accuracy": round(acc, 4)})
+
+        if results:
+            _walk_and_backtest(ticker, data)
+
+    print(f"\n{'='*60}")
+    print("FINAL SUMMARY")
+    print(f"{'='*60}")
+    print(pd.DataFrame(summary).to_string(index=False))
 
 
 if __name__ == "__main__":
