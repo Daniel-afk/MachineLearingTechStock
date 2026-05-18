@@ -62,7 +62,10 @@ with st.sidebar:
         st.info("Crypto uses ±5% thresholds over 3-day windows (vs ±2% / 5-day for stocks).")
     st.divider()
     train_btn = st.button("🚀 Train / Retrain Models", use_container_width=True)
-    st.caption("Trains on all stocks + crypto. Takes ~10–15 min.")
+    st.caption(
+        "Trains **one shared model** on all 7 stocks + 6 crypto assets combined "
+        "(~50k rows). The ticker above only controls what's displayed — not what's trained."
+    )
 
 # ── Training ─────────────────────────────────────────────────────────────────
 
