@@ -34,6 +34,7 @@ from src.model_lstm import TENSORFLOW_AVAILABLE
 from src.news_fetcher import daily_sentiment, fetch_news
 from src.sports_features import SPORTS_FEATURE_COLS, build_game_features, features_for_matchup
 from src.sports_fetcher import SPORTS_CONFIG, fetch_historical_games, fetch_upcoming_games
+from src.live_data import fetch_live_quote, fetch_intraday, fetch_live_scores
 
 LABEL_NAME  = {0: "Sell", 1: "Hold", 2: "Buy"}
 LABEL_COLOR = {0: "#ef4444", 1: "#94a3b8", 2: "#22c55e"}
@@ -72,8 +73,16 @@ with st.sidebar:
         signal_days   = st.slider("Signal history (days)", 10, 90, 30)
     if asset_class == "Crypto":
         st.info("Crypto uses ±5% thresholds over 3-day windows (vs ±2% / 5-day for stocks).")
-    st.divider()
 
+    st.divider()
+    live_refresh = st.toggle("🔴 Live mode", value=False,
+                             help="Auto-refreshes live prices and scores every 30 seconds")
+    if live_refresh:
+        refresh_secs = st.select_slider("Refresh interval", [15, 30, 60, 120], value=30)
+    else:
+        refresh_secs = None
+
+    st.divider()
     if asset_class == "Sports":
         train_btn = st.button("🏆 Train Sports Models", use_container_width=True)
         st.caption(
@@ -104,6 +113,13 @@ if train_btn:
     else:
         st.error("Training failed.")
         st.code(result.stderr[-3000:])
+
+# ── Auto-refresh (live mode) ──────────────────────────────────────────────────
+
+if live_refresh and refresh_secs:
+    import time as _time
+    _time.sleep(refresh_secs)
+    st.rerun()
 
 # ── Cached loaders ────────────────────────────────────────────────────────────
 
@@ -231,6 +247,54 @@ entertainment only. Never use these predictions for gambling or financial decisi
     history_df = load_sports_history(sport_league)
     col_c.metric("Historical games", f"{len(history_df):,}" if not history_df.empty else "—")
 
+    # ── Live scores ───────────────────────────────────────────────────────────
+    st.subheader("📡 Today's scoreboard")
+    with st.spinner("Fetching live scores…"):
+        live_scores = fetch_live_scores(sport_league)
+
+    if live_scores.empty:
+        st.info("No games on the ESPN scoreboard right now.")
+    else:
+        live_games   = live_scores[live_scores["status_raw"] == "in"]
+        sched_games  = live_scores[live_scores["status_raw"] == "pre"]
+        final_games  = live_scores[live_scores["status_raw"] == "post"]
+
+        # Live games — prominent cards
+        if not live_games.empty:
+            st.markdown("#### 🔴 In Progress")
+            cols = st.columns(min(len(live_games), 4))
+            for i, (_, g) in enumerate(live_games.iterrows()):
+                with cols[i % len(cols)]:
+                    st.markdown(
+                        f"**{g['away_team']}** {g['away_score']} — "
+                        f"{g['home_score']} **{g['home_team']}**  \n"
+                        f"<span style='color:#ef4444; font-size:0.82em'>{g['period']}  {g['clock']}</span>",
+                        unsafe_allow_html=True,
+                    )
+
+        # Scheduled
+        if not sched_games.empty:
+            st.markdown("#### 📅 Scheduled")
+            sched_display = sched_games[["date", "away_team", "home_team"]].rename(
+                columns={"date": "Date", "away_team": "Away", "home_team": "Home"}
+            )
+            st.dataframe(sched_display, use_container_width=True, hide_index=True)
+
+        # Final scores
+        if not final_games.empty:
+            st.markdown("#### ✅ Final")
+            final_display = final_games[["away_team", "away_score", "home_score", "home_team", "winner"]].rename(
+                columns={"away_team": "Away", "away_score": "Away score",
+                         "home_score": "Home score", "home_team": "Home", "winner": "Winner"}
+            )
+            st.dataframe(final_display, use_container_width=True, hide_index=True)
+
+        if live_refresh:
+            st.caption(f"🔴 Live mode · refreshing every {refresh_secs}s")
+        else:
+            if st.button("⟳ Refresh scores"):
+                st.rerun()
+
     st.divider()
 
     # Upcoming games predictions
@@ -346,6 +410,58 @@ def predict_signals(df, model, scaler, model_name):
 signals        = predict_signals(df, model, scaler, model_name)
 plot_df        = df.iloc[-lookback_days:].copy()
 recent_signals = signals[signals.index.isin(plot_df.index)]
+
+# ── Live quote banner ─────────────────────────────────────────────────────────
+
+with st.container():
+    live_quote = fetch_live_quote(ticker)
+    if live_quote:
+        price      = live_quote["price"]
+        chg        = live_quote["change"]
+        chg_pct    = live_quote["change_pct"]
+        fetched_at = live_quote["fetched_at"].strftime("%H:%M:%S UTC")
+        color      = "#22c55e" if chg >= 0 else "#ef4444"
+        arrow      = "▲" if chg >= 0 else "▼"
+        mktcap     = live_quote.get("market_cap")
+        mktcap_str = (
+            f"${mktcap/1e12:.2f}T" if mktcap and mktcap >= 1e12 else
+            f"${mktcap/1e9:.1f}B"  if mktcap and mktcap >= 1e9  else ""
+        )
+        st.markdown(
+            f"<div style='background:#1e293b; border-radius:8px; padding:10px 18px; "
+            f"display:flex; align-items:center; gap:28px; margin-bottom:12px'>"
+            f"<span style='font-size:1.5em; font-weight:700'>{ticker}</span>"
+            f"<span style='font-size:1.8em; font-weight:700'>${price:,.4f}</span>"
+            f"<span style='font-size:1.2em; color:{color}'>"
+            f"{arrow} {abs(chg):+.4f} ({chg_pct:+.2f}%)</span>"
+            + (f"<span style='color:#94a3b8; font-size:0.9em'>Mkt cap {mktcap_str}</span>" if mktcap_str else "")
+            + f"<span style='color:#64748b; font-size:0.8em; margin-left:auto'>"
+            f"{'🔴 Live · ' if live_refresh else ''}Updated {fetched_at}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if not live_refresh and st.button("⟳ Refresh quote", key="refresh_quote"):
+            st.rerun()
+
+# ── Intraday chart (today's price action) ─────────────────────────────────────
+
+intraday_df = fetch_intraday(ticker)
+if not intraday_df.empty and "Close" in intraday_df.columns:
+    with st.expander("📡 Today's intraday price (5-min bars)", expanded=False):
+        fig_id = go.Figure()
+        fig_id.add_trace(go.Scatter(
+            x=intraday_df.index, y=intraday_df["Close"],
+            mode="lines", name="Price",
+            line=dict(color="#38bdf8", width=2),
+            fill="tozeroy", fillcolor="rgba(56,189,248,0.08)",
+        ))
+        fig_id.update_layout(
+            template="plotly_dark", height=220,
+            margin=dict(l=0, r=0, t=10, b=0),
+            xaxis_title="Time", yaxis_title="Price",
+            showlegend=False,
+        )
+        st.plotly_chart(fig_id, use_container_width=True)
 
 # ── How it works ──────────────────────────────────────────────────────────────
 
