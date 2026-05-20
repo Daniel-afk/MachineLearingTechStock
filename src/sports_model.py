@@ -15,8 +15,8 @@ from src.sports_features import SPORTS_FEATURE_COLS
 
 def train_sports_rf(X_train, y_train) -> RandomForestClassifier:
     clf = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=8,
+        n_estimators=150,
+        max_depth=6,
         min_samples_leaf=5,
         class_weight="balanced",
         random_state=RANDOM_SEED,
@@ -28,9 +28,9 @@ def train_sports_rf(X_train, y_train) -> RandomForestClassifier:
 
 def train_sports_xgb(X_train, y_train) -> XGBClassifier:
     clf = XGBClassifier(
-        n_estimators=300,
+        n_estimators=150,
         max_depth=5,
-        learning_rate=0.05,
+        learning_rate=0.1,
         subsample=0.8,
         colsample_bytree=0.8,
         use_label_encoder=False,
@@ -55,7 +55,7 @@ def evaluate_sports_model(model, X_test, y_test, name: str) -> dict:
     return {"accuracy": acc, "auc": auc, "brier": brier, "predictions": preds, "probabilities": proba}
 
 
-def walk_forward_sports(feat_df: pd.DataFrame, model_type: str = "xgboost", n_splits: int = 4) -> dict:
+def walk_forward_sports(feat_df: pd.DataFrame, model_type: str = "xgboost", n_splits: int = 3) -> dict:
     feat_df = feat_df.sort_values("date").reset_index(drop=True)
     X = feat_df[SPORTS_FEATURE_COLS].values
     y = feat_df["label"].values.astype(int)

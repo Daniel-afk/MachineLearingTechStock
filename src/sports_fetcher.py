@@ -1,7 +1,6 @@
-import json
 import os
 import time
-from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import requests
@@ -9,10 +8,10 @@ import requests
 DATA_DIR = "data"
 
 SPORTS_CONFIG = {
-    "NFL": {"sport": "football", "league": "nfl", "seasons": range(2018, 2025)},
-    "NBA": {"sport": "basketball", "league": "nba", "seasons": range(2018, 2025)},
-    "MLB": {"sport": "baseball", "league": "mlb", "seasons": range(2018, 2025)},
-    "NHL": {"sport": "hockey", "league": "nhl", "seasons": range(2018, 2025)},
+    "NFL": {"sport": "football", "league": "nfl", "seasons": range(2020, 2025)},
+    "NBA": {"sport": "basketball", "league": "nba", "seasons": range(2020, 2025)},
+    "MLB": {"sport": "baseball", "league": "mlb", "seasons": range(2020, 2025)},
+    "NHL": {"sport": "hockey", "league": "nhl", "seasons": range(2020, 2025)},
 }
 
 _BASE = "https://site.api.espn.com/apis/site/v2/sports"
@@ -90,13 +89,21 @@ def fetch_historical_games(league: str) -> pd.DataFrame:
     cache_path = os.path.join(DATA_DIR, f"sports_{league}.csv")
     if os.path.exists(cache_path):
         df = pd.read_csv(cache_path, parse_dates=["date"])
+        print(f"  [cached] Loaded {len(df)} games from {cache_path}")
         return df
 
-    all_rows = []
-    for season in cfg["seasons"]:
-        rows = _fetch_season_games(cfg["sport"], cfg["league"], season)
-        all_rows.extend(rows)
-        time.sleep(0.5)
+    sport, slug = cfg["sport"], cfg["league"]
+    seasons = list(cfg["seasons"])
+
+    # Fetch all seasons in parallel — each season is an independent HTTP sequence
+    all_rows: list[dict] = []
+    with ThreadPoolExecutor(max_workers=min(len(seasons), 5)) as pool:
+        futures = {pool.submit(_fetch_season_games, sport, slug, s): s for s in seasons}
+        for fut in as_completed(futures):
+            try:
+                all_rows.extend(fut.result())
+            except Exception:
+                pass
 
     if not all_rows:
         return pd.DataFrame()
