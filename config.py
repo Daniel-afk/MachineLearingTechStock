@@ -1,0 +1,22 @@
+TICKERS = ["AAPL", "MSFT", "GOOGL", "NVDA", "META", "AMZN", "TSLA"]
+
+CRYPTO_TICKERS = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "DOGE-USD"]
+
+START_DATE = "2018-01-01"
+END_DATE = "2024-12-31"
+
+# Thresholds for stocks
+FORWARD_DAYS = 5
+BUY_THRESHOLD = 0.02
+SELL_THRESHOLD = -0.02
+
+# Thresholds for crypto (wider — crypto is ~3-5x more volatile than stocks)
+CRYPTO_FORWARD_DAYS = 3
+CRYPTO_BUY_THRESHOLD = 0.05
+CRYPTO_SELL_THRESHOLD = -0.05
+
+TEST_SIZE = 0.2
+SEQUENCE_LEN = 60
+RANDOM_SEED = 42
+DATA_DIR = "data"
+RESULTS_DIR = "results"
