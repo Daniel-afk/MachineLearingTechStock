@@ -60,6 +60,16 @@ def walk_forward_sports(feat_df: pd.DataFrame, model_type: str = "xgboost", n_sp
     X = feat_df[SPORTS_FEATURE_COLS].values
     y = feat_df["label"].values.astype(int)
 
+    n_splits = min(n_splits, len(X) - 1)
+    if n_splits < 1:
+        print("  Not enough data for walk-forward — skipping.")
+        return {
+            "folds": pd.DataFrame(),
+            "oos_accuracy": 0.0,
+            "predictions": np.array([], dtype=int),
+            "probabilities": np.array([]),
+        }
+
     tscv = TimeSeriesSplit(n_splits=n_splits)
     fold_rows = []
     all_preds = np.full(len(X), -1, dtype=int)
