@@ -107,11 +107,18 @@ if train_btn:
             capture_output=True, text=True,
         )
     if result.returncode == 0:
-        st.success(f"Training complete! Models saved to `results/`.")
+        st.success("Training complete! Models saved to `results/`.")
+        if result.stdout:
+            with st.expander("📋 Training log", expanded=False):
+                st.code(result.stdout[-4000:])
         st.cache_resource.clear()
         st.cache_data.clear()
+        st.rerun()
     else:
         st.error("Training failed.")
+        if result.stdout:
+            with st.expander("📋 Training log"):
+                st.code(result.stdout[-4000:])
         st.code(result.stderr[-3000:])
 
 # ── Auto-refresh (live mode) ──────────────────────────────────────────────────
