@@ -30,7 +30,7 @@ def _process_league(league: str) -> dict | None:
     feat_df = feat_df.dropna().reset_index(drop=True)
     print(f"  {len(feat_df)} feature rows")
 
-    MIN_GAMES = 50
+    MIN_GAMES = 100
     if len(feat_df) < MIN_GAMES:
         print(f"  Only {len(feat_df)} feature rows — skipping (need {MIN_GAMES}).")
         return None
